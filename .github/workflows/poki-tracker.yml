@@ -1,0 +1,58 @@
+name: Poki Tracker
+
+on:
+  workflow_dispatch:
+
+  schedule:
+    - cron: "0 21 * * *"
+      timezone: "Asia/Kolkata"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: poki-tracker
+  cancel-in-progress: false
+
+jobs:
+  poki-tracker:
+    runs-on: ubuntu-latest
+
+    env:
+      TZ: Asia/Kolkata
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Poki tracker
+        run: |
+          python scripts/poki_tracker.py
+
+      - name: Commit generated data
+        run: |
+          git add data/
+
+          if git diff --cached --quiet; then
+            echo "No Poki data generated today."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git commit -m "Update Poki tracking data $(date +'%Y-%m-%d')"
+          git push
