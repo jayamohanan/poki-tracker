@@ -4,8 +4,7 @@ import json
 import re
 import sys
 import time
-from calendar import monthrange
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from urllib.parse import urljoin
 
@@ -270,15 +269,6 @@ def extract_json_ld(soup):
 # DATE HELPERS
 # ============================================================
 
-def is_last_day_of_month(date):
-    last_day = monthrange(
-        date.year,
-        date.month
-    )[1]
-
-    return date.day == last_day
-
-
 def iso_week_name(date):
     iso = date.isocalendar()
 
@@ -301,22 +291,6 @@ def quarter_name(date):
         f"{date.year}-Q"
         f"{quarter_number(date.month)}"
     )
-
-
-def determine_modes(date, force):
-    if force == "weekly":
-        return True, False
-
-    if force == "monthly":
-        return False, True
-
-    if force == "both":
-        return True, True
-
-    weekly = date.weekday() == 6
-    monthly = is_last_day_of_month(date)
-
-    return weekly, monthly
 
 
 # ============================================================
@@ -538,23 +512,42 @@ def extract_title(soup):
     return ""
 
 
-def extract_developer(text):
-    patterns = [
-        r"\bDeveloper\s+(.+?)(?=\s+Genre\b)",
-        r"\bby\s+(.+?)(?=\s+\d[\d.,]*[KMB]?\s+Like\b)",
-    ]
+def extract_developer(text, title=""):
+    # The header line reads "<Title> by <Developer> <N> Like". It is the
+    # most reliable source, so anchor on the title first. Developer names
+    # can themselves contain "Developer" (e.g. "Platonov Developer"), and
+    # body text can contain "by", so never search the whole page for them.
+    like = r"\s+[\d.,]+\s*[KMB]?\s+Like\b"
 
-    for pattern in patterns:
+    if title:
         match = re.search(
-            pattern,
+            re.escape(title) + r"\s+by\s+(.+?)(?=" + like + ")",
             text,
             flags=re.I
         )
 
         if match:
-            return clean_text(
-                match.group(1)
-            )
+            return clean_text(match.group(1))
+
+    # Fallback: nearest "by" before the Like count (no other "by" between).
+    match = re.search(
+        r"\bby\s+((?:(?!\bby\b).){1,80}?)(?=" + like + ")",
+        text,
+        flags=re.I
+    )
+
+    if match:
+        return clean_text(match.group(1))
+
+    # Last resort: trailing "developer <Name>" of the "About this game" box.
+    match = re.search(
+        r"\bSupported devices\b.*?\bdeveloper\s+(.{1,80})$",
+        text,
+        flags=re.I
+    )
+
+    if match:
+        return clean_text(match.group(1))
 
     return ""
 
@@ -826,7 +819,10 @@ def scrape_game(
             game_url,
 
         "Developer":
-            extract_developer(text),
+            extract_developer(
+                text,
+                extract_title(soup)
+            ),
 
         "Likes":
             extract_likes(text),
@@ -1510,18 +1506,40 @@ def create_quarterly_report(date):
 # ============================================================
 
 def main():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        description=(
+            "Scrape Poki and write the requested snapshot(s). "
+            "Always scrapes when run; deciding WHEN to run is "
+            "done by scripts/schedule_check.py."
+        )
+    )
 
     parser.add_argument(
-        "--force",
+        "--period",
         choices=[
             "weekly",
             "monthly",
             "both"
         ],
+        default="weekly",
+        help="Which snapshot(s) to create (default: weekly)."
+    )
+
+    parser.add_argument(
+        "--weekly-date",
+        type=date.fromisoformat,
         help=(
-            "Force a run for manual testing. "
-            "Normally omitted in GitHub Actions."
+            "Date the weekly snapshot is named after "
+            "(default: today). Used when a run starts late."
+        )
+    )
+
+    parser.add_argument(
+        "--monthly-date",
+        type=date.fromisoformat,
+        help=(
+            "Date the monthly snapshot is named after "
+            "(default: today)."
         )
     )
 
@@ -1529,48 +1547,47 @@ def main():
 
     ensure_directories()
 
-    now = datetime.now()
-    today = now.date()
+    today = datetime.now().date()
 
-    weekly, monthly = determine_modes(
-        today,
-        args.force
-    )
+    weekly = args.period in ("weekly", "both")
+    monthly = args.period in ("monthly", "both")
+
+    weekly_date = args.weekly_date or today
+    monthly_date = args.monthly_date or today
+
+    week = iso_week_name(weekly_date)
+    month = month_name(monthly_date)
 
     print()
     print("=" * 60)
     print("POKI TRACKER")
     print("=" * 60)
     print(f"Date: {today}")
-    print(f"Weekly run: {weekly}")
-    print(f"Monthly run: {monthly}")
+    print(f"Weekly snapshot: {week if weekly else '-'}")
+    print(f"Monthly snapshot: {month if monthly else '-'}")
 
-    if not weekly and not monthly:
-        print()
-        print(
-            "Today is neither Sunday nor "
-            "month-end."
+    # Fail fast: snapshots are immutable, so do not spend ~45
+    # minutes scraping if the target folder already exists.
+    existing = [
+        folder
+        for wanted, folder in (
+            (weekly, WEEKLY_DIR / week),
+            (monthly, MONTHLY_DIR / month),
         )
-        print(
-            "No Poki scrape required."
+        if wanted and folder.exists()
+    ]
+
+    if existing:
+        raise RuntimeError(
+            "Snapshot already exists, refusing to overwrite: "
+            + ", ".join(str(folder) for folder in existing)
         )
-        return
 
-    # --------------------------------------------------------
-    # IMPORTANT:
-    #
-    # Only ONE Poki scrape happens here.
-    #
-    # If today is both Sunday and month-end,
-    # this one snapshot is reused for both.
-    # --------------------------------------------------------
-
+    # Only ONE Poki scrape happens here; with "both" the
+    # same rows are written to the weekly and monthly folders.
     rows = scrape_full_catalog(today)
 
-    # WEEKLY
     if weekly:
-        week = iso_week_name(today)
-
         create_period(
             WEEKLY_DIR,
             week,
@@ -1578,10 +1595,7 @@ def main():
             "weekly_changes.csv"
         )
 
-    # MONTHLY
     if monthly:
-        month = month_name(today)
-
         create_period(
             MONTHLY_DIR,
             month,
@@ -1590,8 +1604,8 @@ def main():
         )
 
         # Quarter-end report uses monthly data.
-        if today.month in (3, 6, 9, 12):
-            create_quarterly_report(today)
+        if monthly_date.month in (3, 6, 9, 12):
+            create_quarterly_report(monthly_date)
 
     print()
     print("=" * 60)

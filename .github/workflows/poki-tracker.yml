@@ -2,10 +2,21 @@ name: Poki Tracker
 
 on:
   workflow_dispatch:
+    inputs:
+      period:
+        description: "auto = scrape only if due today (Sunday / month-end). Others scrape now."
+        type: choice
+        default: auto
+        options:
+          - auto
+          - weekly
+          - monthly
+          - both
 
   schedule:
-    - cron: "0 21 * * *"
-      timezone: "Asia/Kolkata"
+    # GitHub cron is UTC. 15:30 UTC = 21:00 IST, leaving buffer before
+    # midnight IST for delayed runs (the script uses IST dates).
+    - cron: "30 15 * * *"
 
 permissions:
   contents: write
@@ -38,9 +49,32 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run Poki tracker
+      - name: Decide what is due
+        id: schedule
         run: |
-          python scripts/poki_tracker.py
+          requested="${{ github.event.inputs.period || 'auto' }}"
+
+          if [ "$requested" = "auto" ]; then
+            python scripts/schedule_check.py
+          else
+            echo "Manual request: $requested"
+            echo "period=$requested" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run Poki tracker
+        if: steps.schedule.outputs.period != 'none'
+        run: |
+          args=(--period "${{ steps.schedule.outputs.period }}")
+
+          if [ -n "${{ steps.schedule.outputs.weekly_date }}" ]; then
+            args+=(--weekly-date "${{ steps.schedule.outputs.weekly_date }}")
+          fi
+
+          if [ -n "${{ steps.schedule.outputs.monthly_date }}" ]; then
+            args+=(--monthly-date "${{ steps.schedule.outputs.monthly_date }}")
+          fi
+
+          python scripts/poki_tracker.py "${args[@]}"
 
       - name: Commit generated data
         run: |
