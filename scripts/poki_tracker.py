@@ -82,6 +82,7 @@ MASTER_FIELDS = [
     "Rating",
     "Category Tags",
     "Thumbnail Image URL",
+    "Video Thumbnail URL",
     "Breadcrumb Path",
     "Genre",
     "Poki Release Date",
@@ -695,6 +696,18 @@ def extract_thumbnail(soup):
     return ""
 
 
+def extract_video_thumbnail(soup):
+    meta = soup.find(
+        "meta",
+        attrs={"property": "og:video"}
+    )
+
+    if meta and meta.get("content"):
+        return meta["content"].strip()
+
+    return ""
+
+
 def extract_breadcrumbs(soup):
     breadcrumbs = []
 
@@ -853,6 +866,9 @@ def scrape_game(
 
         "Thumbnail Image URL":
             extract_thumbnail(soup),
+
+        "Video Thumbnail URL":
+            extract_video_thumbnail(soup),
 
         "Breadcrumb Path":
             extract_breadcrumbs(soup),
