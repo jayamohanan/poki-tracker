@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       period:
-        description: "auto = scrape only if due today (Sunday / month-end). Others scrape now."
+        description: "auto = official snapshot, only if due. weekly/monthly/both = scrape now into a -manual- folder."
         type: choice
         default: auto
         options:
@@ -56,8 +56,9 @@ jobs:
 
           if [ "$requested" = "auto" ]; then
             python scripts/schedule_check.py
+            echo "official=--official" >> "$GITHUB_OUTPUT"
           else
-            echo "Manual request: $requested"
+            echo "Manual request: $requested (folder gets a -manual- suffix)"
             echo "period=$requested" >> "$GITHUB_OUTPUT"
           fi
 
@@ -72,6 +73,10 @@ jobs:
 
           if [ -n "${{ steps.schedule.outputs.monthly_date }}" ]; then
             args+=(--monthly-date "${{ steps.schedule.outputs.monthly_date }}")
+          fi
+
+          if [ -n "${{ steps.schedule.outputs.official }}" ]; then
+            args+=(--official)
           fi
 
           python scripts/poki_tracker.py "${args[@]}"

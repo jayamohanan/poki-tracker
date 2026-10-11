@@ -59,6 +59,12 @@ MONTHLY_DIR = DATA_DIR / "monthly"
 QUARTERLY_DIR = DATA_DIR / "quarterly"
 
 
+# Folders created by manual / local runs carry this marker, e.g.
+# "2026-W42-manual-20261012-0930". They never block or feed the
+# scheduled (official) snapshots.
+MANUAL_MARKER = "-manual-"
+
+
 # ============================================================
 # MASTER CSV
 # ============================================================
@@ -952,6 +958,7 @@ def find_previous_snapshot(
             folder
             for folder in base_dir.iterdir()
             if folder.is_dir()
+            and MANUAL_MARKER not in folder.name
             and folder.name < current_folder_name
             and (folder / "master.csv").exists()
         ],
@@ -1543,6 +1550,16 @@ def main():
         )
     )
 
+    parser.add_argument(
+        "--official",
+        action="store_true",
+        help=(
+            "Write the plain period folder (e.g. 2026-W42). Used by the "
+            "scheduled run. Without it, folders get a "
+            "'-manual-<timestamp>' suffix."
+        )
+    )
+
     args = parser.parse_args()
 
     ensure_directories()
@@ -1555,8 +1572,14 @@ def main():
     weekly_date = args.weekly_date or today
     monthly_date = args.monthly_date or today
 
-    week = iso_week_name(weekly_date)
-    month = month_name(monthly_date)
+    suffix = (
+        ""
+        if args.official
+        else f"{MANUAL_MARKER}{datetime.now():%Y%m%d-%H%M}"
+    )
+
+    week = iso_week_name(weekly_date) + suffix
+    month = month_name(monthly_date) + suffix
 
     print()
     print("=" * 60)
@@ -1604,7 +1627,7 @@ def main():
         )
 
         # Quarter-end report uses monthly data.
-        if monthly_date.month in (3, 6, 9, 12):
+        if args.official and monthly_date.month in (3, 6, 9, 12):
             create_quarterly_report(monthly_date)
 
     print()
